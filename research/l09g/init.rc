@@ -1,0 +1,606 @@
+# cat /init.rc
+
+on early-init
+    start ueventd
+
+    mount tmpfs tmpfs /tmp nodev noexec nosuid size=32m
+
+    # we already have /dev mounted
+    mount tmpfs tmpfs /dev remount size=4m
+    mount configfs configfs /sys/kernel/config
+    # set core dump size limit to unlimited
+    # core dump will be generated in /data/coredump/
+    # if the directory exists and writable
+    #setrlimit 4  -1 -1
+    #write /proc/sys/kernel/core_pattern "|/bin/sh /sbin/coredump.sh /data/coredump %e %p %h %s %t"
+
+    # force VM to keep 4096KB of free bytes
+    # default value is 2102(KB)
+    write /proc/sys/vm/min_free_kbytes "4096"
+
+on init
+    # setup the global environment
+    export PATH /bin:/usr/bin:/sbin:/xbin
+    export LD_LIBRARY_PATH /system/vendor/lib:/system/lib:/usr/lib:/lib
+    export SECURE_USER_BUILD 0
+
+    # create mount point
+    mkdir /cache 0700 root chrome
+    mkdir /system.ro 0755 root root
+    mkdir /chrome 0755 chrome chrome
+    mkdir /factory 0755 root chrome
+    mkdir /data 0755 root root
+    chmod 666 /var/lock/fw_printenv.lock
+
+    mkdir /dev/shm
+    mount tmpfs tmpfs /dev/shm size=64m nodev noexec nosuid
+
+    symlink /dev/snd/timer /dev/timer
+
+    chmod 777 /dev/uinput
+    # set interface name
+    setprop wifi.interface wlan0
+    setprop ap.interface uap0
+    setprop persist.chrome.tos_accepted true
+    setprop persist.chrome.opt_in.stats 1
+
+    #The following definitions enable audioplayer for dobly
+    export media_arm_audio_decoder dts,ac3,eac3,mp3,aac,pcm
+    export media_audio_use_hardabuf 0
+
+    # The following definitions enable model-based provisioning using software
+    # based keys. This exercises the full key generation flow, but is not
+    # secure and SHALL NOT be used in production devices.
+    export CAST_MODEL_CHAIN_SW /factory/model.crt
+    export CAST_MODEL_PRIVKEY_SW /factory/model.key.bin
+    export CAST_CLIENT_CERT /factory/client.crt
+    export CAST_CLIENT_PRIVKEY /factory/client.key.bin
+
+on fs
+    # mount system&factory&data partitions
+    exec /sbin/busybox sh /sbin/mount_partitions.sh
+
+    # mount squashfs /dev/mapper/system /system.ro ro nodev noatime
+    mount squashfs /dev/block/mtdblock4 /system.ro ro nodev noatime
+    mount squashfs /dev/block/mtdblock5 /chrome ro nodev noatime
+
+    # Note mounting /system needs to be the first thing. Some other commands
+    # might depend on /system binaries.
+    mkdir /cache/.system.work 0755 root chrome
+    mkdir /cache/.system.overlay 0755 root chrome
+    exec /sbin/busybox ln -snf /system.ro/etc/fstab /etc/fstab
+	mount overlay overlay /system lowerdir=/system.ro,upperdir=/cache/.system.overlay,workdir=/cache/.system.work
+    mkdir /cache/.chrome.work 0755 root chrome
+    mkdir /cache/.chrome.overlay 0755 root chrome
+    mount overlay overlay /chrome lowerdir=/chrome,upperdir=/cache/.chrome.overlay,workdir=/cache/.chrome.work
+
+    symlink /system/lib/firmware /lib/firmware
+    symlink /chrome/ /system/chrome
+
+    # failure safe to re-generate cache if above steps fails
+    exec /bin/sh /sbin/check_and_mount_ubifs.sh 7 cache /cache 20
+
+    # Set the group of cache mount point to chrome
+    # so update_engine can create files freely, but set
+    # the sticky bit so that it can't mess with any
+    # files it doesn't own.
+    chown root chrome /cache
+    chmod 1775 /cache
+
+    # Mount /data inside of /cache so that we can share a single
+    # partition.  This allows us to spread wear across the
+    # flash better and allows for more flexibility.
+    mkdir /cache/.data 0755 root root
+
+    exec /bin/mount -o bind /cache/.data /data
+
+    # Mount debugfs
+    mount debugfs none /sys/kernel/debug
+    chown root chrome /sys/kernel/debug
+    chmod 0750 /sys/kernel/debug
+
+    # create directory for share
+    mkdir /data/share 0755 root root
+    mkdir /data/share/sntpd 0775 sntpd sntpd
+
+    # create directory for cast receiver package
+    mkdir /data/chrome 0770 chrome chrome
+    mkdir /data/share/chrome 0775 root chrome
+    mkdir /data/logs 0770 chrome chrome
+
+    mkdir /data/chrome/tmp 0770 chrome chrome
+    mount tmpfs tmpfs /data/chrome/tmp size=1m
+    chown chrome chrome /data/chrome/tmp
+    chmod 0770 /data/chrome/tmp
+
+    # create directory for external metrics
+    # Move it to /data/metrics.
+    mkdir /data/share/chrome/metrics 0730 metrics metrics
+    mount tmpfs tmpfs /data/share/chrome/metrics size=1m
+    chown metrics metrics /data/share/chrome/metrics
+    chmod 0730 /data/share/chrome/metrics
+
+    # create directory for cast_receiver metrics
+    mkdir /data/chrome/metrics 0700 chrome chrome
+    mount tmpfs tmpfs /data/chrome/metrics size=1m
+    chown chrome chrome /data/chrome/metrics
+    chmod 0700 /data/chrome/metrics
+
+    # create directory for crash_manager
+    mkdir /data/chrome/minidumps 0770 chrome chrome
+
+    # create directory for non-essential artifacts
+    mkdir /data/chrome/tmp 0770 chrome chrome
+
+    # create directory for update_engine
+    mkdir /data/chrome/update 0770 chrome chrome
+
+    # create directory for cast ota update
+    mkdir /data/chrome/cache 0770 chrome chrome
+
+    # create directory for wpa_supplicant
+    mkdir /data/wifi 0770 wifi wifi
+    mkdir /dev/socket/wifi 0770 wifi wifi
+
+    exec /bin/sudo -u wifi /bin/sh /setup/wpa_supplicant_setup.sh
+
+    # create directory for widevine
+    mkdir /data/widevine 0750 chrome chrome
+
+    exec /bin/sh /sbin/collectd_setup.sh
+
+    exec /bin/sh /sbin/bluetooth_setup.sh
+
+    exec /bin/sudo -u chrome /bin/sh /setup/mute_setup.sh
+
+    #Generate Bluetooth Mac Address
+    exec /sbin/busybox sh /setup/BT_mac_setup.sh
+
+    # create directory for tee secure storage
+    symlink /factory /tee
+
+    # Create the directory used to hold client auth device credentials
+    mkdir /data/castauth 0770 chrome chrome
+
+    mkdir /var/ 0666 root chrome
+    mkdir /var/lock/ 0666 root chrome
+    exec /bin/touch  /var/lock/fw_printenv.lock
+
+    #adbd
+    mkdir /sys/kernel/config/usb_gadget/amlogic
+    write /sys/kernel/config/usb_gadget/amlogic/idVendor "0x18D1"
+    write /sys/kernel/config/usb_gadget/amlogic/idProduct "0x4e26"
+    mkdir /sys/kernel/config/usb_gadget/amlogic/strings/0x409
+    write /sys/kernel/config/usb_gadget/amlogic/strings/0x409/serialnumber "L09G0123456789"
+    write /sys/kernel/config/usb_gadget/amlogic/strings/0x409/manufacturer "Xiaomi"
+    write /sys/kernel/config/usb_gadget/amlogic/strings/0x409/product "L09G"
+    mkdir /sys/kernel/config/usb_gadget/amlogic/configs/amlogic.1
+    mkdir /sys/kernel/config/usb_gadget/amlogic/configs/amlogic.1/strings/0x409
+    write /sys/kernel/config/usb_gadget/amlogic/configs/amlogic.1/strings/0x409/configuration "adb"
+    mkdir /sys/kernel/config/usb_gadget/amlogic/functions/ffs.adb
+    mkdir /dev/usb-ffs
+    mkdir /dev/usb-ffs/adb
+    mount functionfs adb /dev/usb-ffs/adb
+    symlink /sys/kernel/config/usb_gadget/amlogic/functions/ffs.adb /sys/kernel/config/usb_gadget/amlogic/configs/amlogic.1/ffs.adb
+
+on post-fs
+    # once everything is setup, no need to modify /
+    mount rootfs rootfs / ro remount
+
+    # network-related
+    exec /bin/ifconfig lo up
+    # exec /bin/alsactl restore -f /etc/asound.state
+    write /etc/hosts "127.0.0.1 localhost"
+    chmod 0644 /etc/hosts
+    write /proc/sys/kernel/hostname Chromecast
+    mkdir /data/property 0777 root root
+
+    # use IPv6 privacy addresses
+    write /proc/sys/net/ipv6/conf/default/use_tempaddr "2"
+    write /proc/sys/net/ipv6/conf/eth0/use_tempaddr "2"
+    write /proc/sys/net/ipv6/conf/wlan0/use_tempaddr "2"
+    write /proc/sys/net/ipv6/conf/wlan1/use_tempaddr "2"
+
+    # set tcp socket buffer size
+    # only max value differs from kernel default
+    write /proc/sys/net/ipv4/tcp_rmem "4096 87380 2097152"
+    write /proc/sys/net/ipv4/tcp_wmem "4096 16384 2097152"
+    write /proc/sys/net/core/rmem_max "1220608"
+    write /proc/sys/net/core/wmem_max "1220608"
+
+    # Enable ICMP echo for broadcast/multicast address
+    write /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts "0"
+
+    # logd: Increase datagram socket's qlen
+    write /proc/sys/net/unix/max_dgram_qlen 600
+
+    mkdir /data/sntpd 0700 sntpd sntpd
+
+    # Make kmsg readable/writeable to logd
+    chown root logd /dev/kmsg
+    chown root logd /proc/kmsg
+    chmod 0440 /proc/kmsg
+    chmod 0620 /dev/kmsg
+
+    # dhcpcd creates resolv.conf with wrong umask
+    # fill in Google DNS server in case router is not
+    # able to configure nameserver.
+    write /etc/resolv.conf "nameserver 8.8.8.8"
+    chmod 0644 /etc/resolv.conf
+    chown dhcp dhcp /etc/resolv.conf
+
+    # set defalt timezone to US pacific
+    symlink /usr/share/zoneinfo/America/Los_Angeles /data/share/chrome/localtime
+
+    chmod 0644 /etc/current_firmware_version.json
+
+on boot
+    exec /bin/sh /sbin/set_prompt_language.sh
+    exec /bin/sh /sbin/mute_check_bootup.sh
+    exec /bin/sh /sbin/remove_tmp_file.sh
+
+    # Enable heap randomization before services start
+    write  /proc/sys/kernel/randomize_va_space "2"
+
+    start logd
+
+    # run the client auth indiv for model-based method
+    exec /chrome/client_auth_indiv --action=ensure --logtofile
+
+    start mute_service
+
+    # Play a dummy file to initialize the ALSA plugins.
+    exec /bin/aplay -Dvolume /usr/share/empty.wav
+
+    # dump device msg to logcat
+    #start dump_msg
+
+    exec /bin/sh -c "mount -w -o remount /dev/block/rootfs /"
+
+    #setup Bluetooth Mac Address,if don`t set BT mac, bt will fail
+    exec /bin/logwrapper /bin/set_macaddr
+
+    exec /sbin/populate_sn.sh
+    exec /bin/sh -c "echo Serial Number: $(cat /factory/serial.txt) > /dev/ttyS0"
+
+    # update bootid and urandom
+    exec /bin/sh /sbin/update_bootid_and_urandom.sh
+
+    # for adb
+    exec /usr/bin/set_usb_serialnumber.sh
+
+    exec /bin/sh /usr/bin/insert_modules.sh
+
+    # network_service.sh starts dhcp and net_mgr if necessary.
+    exec /bin/sh /sbin/network_service.sh
+    start cast_auth_check
+
+    start iot_audio
+
+    start cast_installer
+
+    start servicemanager
+
+    exec /sbin/busybox sh /setup/wifi_mac_setup.sh
+    exec /bin/sh /usr/bin/start_wifi_bt.sh
+    chmod 666 /sys/devices/platform/soc/ff800000.aobus/ff805000.i2c/i2c-1/1-003b/led_rgb
+
+    # thermal_governor manages digital volume gain from amplifier
+    #start thermal_governor
+
+    chown root chrome /chrome/chrome-sandbox
+    chmod 04755 /chrome/chrome-sandbox
+    chown root chrome system/bin/dumpstate
+    chmod 04750 system/bin/dumpstate
+
+    # for ota, need change to /chrome/cache
+    mkdir /chrome/cache
+    chown chrome chrome /chrome/cache
+
+    #cast_receiver is start on cast_installer.sh
+    #start cast_receiver
+
+    start sntpd
+
+    chown root chrome /dev/input/event0
+    chown root chrome /dev/input/event1
+    chown root chrome /dev/input/event2
+    chown root chrome /dev/input/event3
+
+    #chown root panel /dev/i2c-1
+    #chmod 0660 /dev/i2c-1
+
+    start input_service
+
+    start console
+
+    start adbd
+    exec /bin/sleep 1
+    write /sys/kernel/config/usb_gadget/amlogic/UDC "ff400000.dwc2_a"
+
+    start sshd
+
+    exec /bin/sh /sbin/watchdog_setup.sh
+    start watchdog
+    #start iperf
+    #start iperf_udp
+
+    #enable welcome message and Muted microphone warning message
+    #Create a file to signal that assistant should play a bootup done tone
+    #signalling that end of bootup should not be quiet
+    start force_bootup
+
+    exec /bin/sh -c "echo 0 > /proc/sys/kernel/printk"
+    start boot_complete
+
+    # Disallow raw tracepoint access for unpriv
+    write /proc/sys/kernel/perf_event_paranoid "0"
+
+    start mountd
+
+    # oneshot service to uploader dumpstate after factory data reset
+    # start dumpstate
+
+    start collectd
+
+    start process_monitor
+
+    start fdr_notify
+
+    start ota_service
+
+    # start ota external control
+    #start external_control
+
+    #start audio_source
+
+    start panel_service
+## Daemon processes to be run by init.
+# Service class names:
+#   onboot - services that should be started only once, on boot
+#   services - services which may be restarted
+#   <default> - oneshot services which are started explicitly (dhcpd, etc)
+#
+# These class names are used by the debug script /sbin/android, to allow core
+# services to be bounced.
+
+service ueventd /sbin/ueventd
+    class onboot
+    critical
+
+service console /sbin/busybox sh
+    console
+    user root
+
+service sntpd /bin/sntpd
+    user root
+
+service dhcpcd /bin/dhcpcd eth0 wlan0 -B --noarp -hXiaomi
+    class service
+    user root
+
+service wpa_supplicant /bin/wpa_supplicant -Dnl80211 -iwlan0 -c/data/wifi/wpa_supplicant.conf
+    socket wpa_wlan0 dgram 660 wifi wifi
+    class service
+
+service adbd /sbin/adbd
+    oneshot
+    disabled
+
+service boot_complete /bin/sh /sbin/boot_complete.sh
+    class service
+    oneshot
+    disabled
+
+# sshd executable will be removed from the system image for secure
+# builds (e.g. user builds) during the signing process.
+service sshd /usr/bin/sshd -G -r /etc/rsa_host_key -F
+    oneshot
+    disabled
+
+#--voice-call-aec-gain-fixed and --voice-call-aec-delay-params should be tuned
+# on deferent platform, the following gain value is an example.
+service iot_audio /bin/logwrapper /chrome/bin/iot_audio_capture  \
+    --voice-call-aec-gain-fixed=54:0:51:3:45:9:39:15:34:20:31:23:27:27:27:27:27:27:27:27:27:27 \
+    --voice-call-aec-delay-params=180:204
+
+    capabilities SYS_NICE
+    user chrome
+    group chrome graphics wifi net_mgr watchdog log panel metrics mdns audio inet root net_bt_stack led
+    oneshot
+
+#service cast_receiver /bin/logwrapper /system/usr/bin/start_cast_shell.sh \
+#    capabilities SYS_NICE SYS_RESOURCE
+#    user chrome
+#    group chrome graphics wifi net_mgr watchdog log panel metrics mdns audio inet root net_bt_stack led
+#    oneshot
+
+service cast_receiver /bin/logwrapper /chrome/cast_cli start cast async \
+    --accept-resource-provider=false \
+    --alsa-volume-device-name="default" \
+    --alsa-amp-device-name="default" \
+    --alsa-amp-element-name="SPK unmute" \
+    --audio-output-channels=2 \
+    --enable-multizone=true \
+    --audio-input-mic-sensitivity=-26 \
+    --alsa-fixed-output-sample-rate=48000 \
+    --alsa-output-start-threshold=4096 \
+    --alsa-output-buffer-size=4096 \
+    --alsa-output-period-size=256  \
+    --default-eureka-name-prefix="Mi Smart Speaker" \
+    --max-output-volume-dba1m=80 \
+    --setup-ssid-suffix=n115 \
+    --user-eq-max-bands=2 \
+    --ui-volume-control-levels=10 \
+    --voice-control-volume-up-down-percentage=5 \
+    --enable-multichannel=true \
+    --enable-hi-res-audio-support=true \
+    --ota-directory=/data/chrome/cache/
+
+    capabilities SYS_NICE SYS_RESOURCE
+    user chrome
+    group chrome graphics wifi net_mgr watchdog log panel metrics mdns audio inet root net_bt_stack led
+    oneshot
+
+service cast_installer /bin/logwrapper /bin/sh /sbin/cast_installer.sh
+    user root
+    class service
+    disabled
+    oneshot
+
+service input_service /bin/logwrapper /bin/input_service 0
+    user chrome
+    group chrome panel input
+    class service
+
+service force_bootup /bin/logwrapper /bin/sh /sbin/force_bootup_sequence.sh
+    user root
+    class service
+    disabled
+    oneshot
+
+#service cast_control_server /bin/logwrapper /bin/cast_control_server 8002
+#    user root
+#    group chrome system
+#    class service
+#    disabled
+
+service net_mgr /bin/net_mgr
+    socket net_mgr seqpacket 0660 root net_mgr
+    class service
+
+service dnsmasq /bin/dnsmasq
+    class service
+    disabled
+
+on property:dnsmasq.enable=1
+    start dnsmasq
+
+on property:dnsmasq.enable=0
+    stop dnsmasq
+
+service watchdog /bin/watchdog -F
+    socket watchdog seqpacket 0660 root watchdog
+    class service
+    oneshot
+    disabled
+
+#service iperf /bin/logwrapper /bin/iperf -s -p 8200 -i 2 -w 128K
+#   oneshot
+
+#service iperf_udp /bin/logwrapper /bin/iperf -s -p 8201 -i 2 -u
+#   oneshot
+
+service logd /system/bin/logd
+   class service
+   socket logd stream 666 logd logd
+   socket logdr seqpacket 666 logd logd
+   socket logdw dgram 222 logd logd
+   capabilities SYSLOG AUDIT_CONTROL SETGID SETUID
+   user logd
+   group logd system package_info readproc
+
+on property:logd.logpersistd.enable=true
+    # all exec/services are called with umask(077), so no gain beyond 0700
+    mkdir /data/misc/logd 0700 logd log
+    start logcatd
+
+on property:logd.logpersistd.enable=false
+    stop logcatd
+
+service logcatd /system/bin/logcatd -b system,main -v threadtime -v printable -f /data/misc/logd/logcat -r 1024 -n 5
+    class late_start
+    user logd # write to /data/misc/logd
+    group log # read from log daemon
+
+service mountd /sbin/mount_usb_drive.sh
+    oneshot
+
+on property:hostapd.enable=1
+    start hostapd
+
+on property:hostapd.enable=0
+    stop hostapd
+
+service panel_service /bin/logwrapper /bin/panel_service
+    user root
+    group panel watchdog chrome
+    socket panel seqpacket 0660 root panel
+    class service
+
+service servicemanager /system/bin/servicemanager
+    capabilities SYS_NICE
+    user system
+    group system
+    critical
+    oneshot
+
+service fdr_notify /bin/logwrapper /bin/fdr_notify
+    group chrome panel input
+    class service
+
+service ota_service /bin/logwrapper /bin/mi_ota_service
+    class service
+
+#service external_control /bin/logwrapper /bin/external_control
+#    user chrome
+#    group chrome
+#    class service
+
+# NET_ADMIN capability is required by rfkill (see kernel/net/rfkill/core.c)
+service bluetoothtbd /system/bin/bluetoothtbd --enable-on-start=true
+    capabilities SYS_NICE NET_ADMIN
+    user bluetooth
+    group chrome net_bt_stack input
+    socket bluetooth_a2dp seqpacket 0660 net_bt_stack net_bt_stack
+    class service
+
+#service autostartscript /bin/sh -c "sleep 20; sh /data/autostart.sh"
+#    user root
+#    oneshot
+
+# Start autostartscript only for builds without a release track.
+on property:ro.product.release.track=
+    start autostartscript
+
+service collectd /bin/collectd -f
+    user root
+    class service
+    disabled
+
+service mute_service /bin/mute_service
+    user chrome
+    group audio panel
+    class service
+
+service process_monitor /bin/process_monitor
+    class service
+
+#service thermal_governor /bin/logwrapper /bin/thermal_governor
+#    class service
+
+#service audio_source /bin/logwrapper /bin/audio_source
+#   group chrome
+#   class service
+
+on property:persist.chrome.reboot=true
+    setprop persist.chrome.reboot false
+    exec system/bin/reboot
+
+service cast_auth_check /bin/cast_auth_check
+    user root
+    oneshot
+
+service unloadamlbtsdio /system/bin/rmmod sdio_bt
+    disabled
+    oneshot
+
+on property:bluetooth.amlbtsdiodriver=true
+    insmod lib/kernel/modules/sdio_bt.ko
+	chown bluetooth bluetooth /dev/stpbt
+    chmod 0777 /dev/stpbt
+
+on property:bluetooth.amlbtsdiodriver=false
+    start unloadamlbtsdio
+
+#

@@ -3,6 +3,10 @@
 This procedure replaces `infos-and-ssh.md` with a single, ordered workflow: first obtain a
 persistent root shell **without touching `boot`/`recovery`**, then back up every NAND partition.
 
+> For a virgin unit that still refuses SSH with `disabled on stable-channel`, use
+> [`ssh-from-virgin.md`](ssh-from-virgin.md): it includes the U-Boot/ramfs workflow and the
+> `dropbearmulti` patch (or the telnet-first fallback).
+
 > **Warning**
 > `boot` and `recovery` are signed and their payloads are encrypted. Do not modify them casually.
 > This guide writes only to the `data` partition (UBI, `mtd7`) and its overlay. Always keep a backup
